@@ -1,0 +1,389 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Phòng đo phổ Fourier</title>
+<style>
+  :root {
+    --bg: #0f1419; --panel: #171e26; --line: #263241; --text: #e6edf3; --muted: #8b9bab;
+    --accent: #3fb6a8; --accent2: #f2b84b; --bad: #e5534b; --good: #3fb950;
+    --mono: "Cascadia Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+           padding: 14px 20px; border-bottom: 1px solid var(--line); }
+  header h1 { font-size: 18px; margin: 0; font-weight: 600; }
+  header .sub { color: var(--muted); font-size: 13px; }
+  main { padding: 16px 20px 32px; display: grid; gap: 16px; grid-template-columns: 300px 1fr; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { main { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
+  .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 10px; font-weight: 600; }
+  button { background: #22303d; color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 8px 12px;
+           font: inherit; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #062420; border-color: var(--accent); font-weight: 600; }
+  button.on { border-color: var(--accent); box-shadow: inset 0 0 0 1px var(--accent); }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  .modes { display: grid; gap: 6px; }
+  .modes button { text-align: left; }
+  .modes small { display: block; color: var(--muted); font-size: 12px; }
+  label { font-size: 13px; color: var(--muted); }
+  input { width: 100%; background: #0f1419; color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 7px 8px; font: inherit; }
+  .kv { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 14px; }
+  .kv span:nth-child(odd) { color: var(--muted); }
+  .kv span:nth-child(even) { font-family: var(--mono); text-align: right; }
+  .metrics { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .metric { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; }
+  .metric .lab { font-size: 12px; color: var(--muted); }
+  .metric .val { font: 600 26px/1.2 var(--mono); margin-top: 4px; }
+  .metric .val small { font-size: 14px; color: var(--muted); font-weight: 400; }
+  .good { color: var(--good); } .bad { color: var(--bad); }
+  .charts { display: grid; gap: 16px; }
+  canvas { width: 100%; height: 240px; display: block; }
+  .status { font-size: 13px; color: var(--muted); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; background: var(--bad); margin-right: 6px; }
+  .dot.live { background: var(--good); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 6px 8px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child, th:nth-child(2), td:nth-child(2) { text-align: left; }
+  th { color: var(--muted); font-weight: 600; }
+  td { font-family: var(--mono); }
+  .tablewrap { overflow-x: auto; }
+  .note { font-size: 12px; color: var(--muted); margin-top: 8px; }
+  .side { display: grid; gap: 16px; align-content: start; }
+  .content { display: grid; gap: 16px; min-width: 0; }
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Số hóa tín hiệu nhiệt độ qua ADC ESP32 và phân tích phổ Fourier</h1>
+  </div>
+  <div class="row" style="align-items:center">
+    <span class="status" id="status"><span class="dot" id="dot"></span>Chưa kết nối</span>
+    <button class="primary" id="btnConnect">Kết nối ESP32</button>
+    <button id="btnSim">Chạy mô phỏng</button>
+  </div>
+</header>
+
+<main>
+  <aside class="side">
+    <section class="panel">
+      <h2>Chế độ đo</h2>
+      <div class="modes" id="modes">
+        <button data-cmd="S0">Nhiệt độ LM35<small>fs = 2 Hz, đo thật</small></button>
+        <button data-cmd="S1">Kiểm chứng sin 2.5 Hz<small>fs = 20 Hz, trùng bin k = 8</small></button>
+        <button data-cmd="S2">Kiểm chứng sin 4.0 Hz<small>fs = 20 Hz, lệch bin → rò rỉ phổ</small></button>
+        <button data-cmd="S3">Aliasing sin 8 Hz<small>fs = 10 Hz &lt; 2·f0 → chồng phổ</small></button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Cửa sổ</h2>
+      <div class="row">
+        <button data-cmd="WH" id="wHann">Hann</button>
+        <button data-cmd="WR" id="wRect">Chữ nhật</button>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Thí nghiệm tùy chỉnh (DAC)</h2>
+      <div class="row">
+        <div style="flex:1"><label for="inTs">Ts (ms)</label><input id="inTs" type="number" value="50" min="10" max="1000"></div>
+        <div style="flex:1"><label for="inF0">f0 (Hz)</label><input id="inF0" type="number" value="3" step="0.1" min="0.1" max="50"></div>
+      </div>
+      <div class="row" style="margin-top:8px"><button id="btnCustom">Áp dụng</button></div>
+      <div class="note">Gợi ý: Ts = 50 ms (fs = 20 Hz), f0 = 12 Hz sẽ bị chồng phổ về 8 Hz.</div>
+    </section>
+
+    <section class="panel">
+      <h2>Thông số lấy mẫu</h2>
+      <div class="kv">
+        <span>Nguồn tín hiệu</span><span id="kSrc">–</span>
+        <span>Tần số lấy mẫu fs</span><span id="kFs">–</span>
+        <span>Nyquist fs/2</span><span id="kNyq">–</span>
+        <span>Số điểm FFT N</span><span id="kN">–</span>
+        <span>Độ phân giải Δf = fs/N</span><span id="kDf">–</span>
+        <span>Cửa sổ ghi dữ liệu N/fs</span><span id="kT">–</span>
+        <span>f0 phát ra</span><span id="kF0">–</span>
+      </div>
+    </section>
+  </aside>
+
+  <div class="content">
+    <section class="metrics">
+      <div class="metric"><div class="lab">Giá trị tức thời</div><div class="val" id="mVal">–</div></div>
+      <div class="metric"><div class="lab">Thành phần DC (trung bình)</div><div class="val" id="mDc">–</div></div>
+      <div class="metric"><div class="lab">Tần số đỉnh đo được</div><div class="val" id="mFp">–</div></div>
+      <div class="metric"><div class="lab">Tần số lý thuyết</div><div class="val" id="mFe">–</div></div>
+      <div class="metric"><div class="lab">Sai số tần số</div><div class="val" id="mErr">–</div></div>
+      <div class="metric"><div class="lab">Biên độ đỉnh</div><div class="val" id="mAmp">–</div></div>
+    </section>
+
+    <section class="charts">
+      <div class="panel"><h2>Tín hiệu đã số hóa x[n] (miền thời gian)</h2><canvas id="cTime"></canvas></div>
+      <div class="panel"><h2>Phổ biên độ một phía |X(f)| (miền tần số)</h2><canvas id="cSpec"></canvas>
+        <div class="note">Cột cam: bin đỉnh. Vạch đứt xanh: tần số lý thuyết, đã tính đến aliasing. Thành phần DC (k = 0) đã được khử.</div></div>
+    </section>
+
+    <section class="panel">
+      <h2>Bảng kết quả thí nghiệm</h2>
+      <div class="row" style="margin-bottom:10px">
+        <button id="btnRecord" class="primary">Ghi kết quả hiện tại</button>
+        <button id="btnCsv">Xuất CSV</button>
+        <button id="btnClear">Xóa bảng</button>
+      </div>
+      <div class="tablewrap">
+        <table>
+          <thead><tr><th>#</th><th>Thí nghiệm</th><th>Cửa sổ</th><th>fs (Hz)</th><th>f0 (Hz)</th><th>f lý thuyết</th><th>f đo</th><th>Sai số</th><th>Biên độ</th></tr></thead>
+          <tbody id="tbody"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</main>
+
+<script>
+"use strict";
+const N = 64, HALF = N / 2;
+const $ = id => document.getElementById(id);
+
+// ---------------- Trạng thái ----------------
+const st = { cfg: null, samples: [], spec: null, link: null, rows: [] };
+
+function fmt(v, d = 3) { return (v === undefined || v === null || isNaN(v)) ? "–" : Number(v).toFixed(d); }
+function unit() { return st.cfg && st.cfg.u === "C" ? "°C" : "mV"; }
+
+// ---------------- Xử lý dòng JSON từ ESP32 ----------------
+function handleLine(line) {
+  line = line.trim();
+  if (!line.startsWith("{")) return;
+  let m; try { m = JSON.parse(line); } catch { return; }
+  if (m.t === "cfg") { st.cfg = m; st.samples = []; st.spec = null; renderCfg(); }
+  else if (m.t === "x") { st.samples.push(m.v); if (st.samples.length > 200) st.samples.shift(); st.last = m.v; }
+  else if (m.t === "f") { st.spec = m; }
+  else if (m.t === "err") { console.warn(m.msg); alert(m.msg); }
+  scheduleDraw();
+}
+
+function renderCfg() {
+  const c = st.cfg;
+  $("kSrc").textContent = c.src === "dac" ? "DAC → ADC (GPIO25→33)" : "LM35 → ADC (GPIO32)";
+  $("kFs").textContent = fmt(c.fs, 2) + " Hz";
+  $("kNyq").textContent = fmt(c.fs / 2, 2) + " Hz";
+  $("kN").textContent = c.N;
+  $("kDf").textContent = fmt(c.fs / c.N, 4) + " Hz";
+  $("kT").textContent = fmt(c.N / c.fs, 1) + " s";
+  $("kF0").textContent = c.src === "dac" ? fmt(c.f0, 2) + " Hz" : "–";
+  $("wHann").classList.toggle("on", c.w === "hann");
+  $("wRect").classList.toggle("on", c.w === "rect");
+  document.querySelectorAll("#modes button").forEach(b => b.classList.toggle("on", b.dataset.cmd === "S" + c.sc));
+}
+
+function renderMetrics() {
+  const c = st.cfg, s = st.spec, u = unit();
+  $("mVal").innerHTML = st.last === undefined ? "–" : `${fmt(st.last, c && c.u === "C" ? 2 : 0)} <small>${u}</small>`;
+  if (!s) { ["mDc", "mFp", "mFe", "mErr", "mAmp"].forEach(id => $(id).textContent = st.samples.length ? `lấy mẫu ${Math.min(st.samples.length, N)}/${N}` : "–"); return; }
+  $("mDc").innerHTML = `${fmt(s.dc, c.u === "C" ? 2 : 0)} <small>${u}</small>`;
+  $("mFp").innerHTML = s.ok ? `${fmt(s.fp, 3)} <small>Hz</small>` : `– <small>dưới ngưỡng nhiễu</small>`;
+  $("mFe").innerHTML = s.fe !== undefined ? `${fmt(s.fe, 3)} <small>Hz</small>` : "–";
+  const e = $("mErr");
+  if (s.e !== undefined) { e.innerHTML = `${fmt(s.e, 2)} <small>%</small>`; e.className = "val " + (s.e < 2 ? "good" : "bad"); }
+  else { e.textContent = "–"; e.className = "val"; }
+  $("mAmp").innerHTML = `${fmt(s.a, c.u === "C" ? 2 : 0)} <small>${u}</small>`;
+}
+
+// ---------------- Vẽ đồ thị ----------------
+const css = name => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+function setupCanvas(cv) {
+  const r = cv.getBoundingClientRect(), dpr = window.devicePixelRatio || 1;
+  if (cv.width !== Math.round(r.width * dpr)) { cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr); }
+  const g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, r.width, r.height);
+  return [g, r.width, r.height];
+}
+function niceMax(v) { if (v <= 0) return 1; const p = Math.pow(10, Math.floor(Math.log10(v))); for (const m of [1, 2, 2.5, 5, 10]) if (v <= m * p) return m * p; return 10 * p; }
+
+function axes(g, W, H, L, B, xTicks, yMin, yMax, xLab, yLab) {
+  g.strokeStyle = css("--line"); g.fillStyle = css("--muted"); g.font = "12px Segoe UI"; g.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = 10 + (H - B - 10) * i / 4, v = yMax - (yMax - yMin) * i / 4;
+    g.beginPath(); g.moveTo(L, y); g.lineTo(W - 10, y); g.stroke();
+    g.textAlign = "right"; g.fillText(Math.abs(v) >= 100 ? v.toFixed(0) : v.toFixed(2), L - 6, y + 4);
+  }
+  g.textAlign = "center";
+  xTicks.forEach(([x, t]) => g.fillText(t, x, H - B + 16));
+  g.fillText(xLab, (L + W) / 2, H - 4);
+  g.save(); g.translate(12, (H - B) / 2); g.rotate(-Math.PI / 2); g.fillText(yLab, 0, 0); g.restore();
+}
+
+function drawTime() {
+  const [g, W, H] = setupCanvas($("cTime")), L = 56, B = 34, xs = st.samples;
+  if (!st.cfg || xs.length < 2) return;
+  let lo = Math.min(...xs), hi = Math.max(...xs);
+  const pad = Math.max((hi - lo) * 0.15, st.cfg.u === "C" ? 0.3 : 20); lo -= pad; hi += pad;
+  const n = xs.length, px = i => L + (W - L - 10) * i / Math.max(n - 1, 1), py = v => 10 + (H - B - 10) * (hi - v) / (hi - lo);
+  const fs = st.cfg.fs, ticks = [];
+  for (let k = 0; k <= 5; k++) { const i = Math.round((n - 1) * k / 5); ticks.push([px(i), (-(n - 1 - i) / fs).toFixed(1)]); }
+  axes(g, W, H, L, B, ticks, lo, hi, "thời gian (s, 0 = mẫu mới nhất)", unit());
+  // Vùng N mẫu cuối đưa vào FFT
+  if (n >= N) { g.fillStyle = "rgba(63,182,168,.07)"; g.fillRect(px(n - N), 10, px(n - 1) - px(n - N), H - B - 10); }
+  g.strokeStyle = css("--accent"); g.lineWidth = 1.5; g.beginPath();
+  xs.forEach((v, i) => i ? g.lineTo(px(i), py(v)) : g.moveTo(px(i), py(v))); g.stroke();
+  if (n <= 120) { g.fillStyle = css("--accent"); xs.forEach((v, i) => { g.beginPath(); g.arc(px(i), py(v), 2, 0, 7); g.fill(); }); }
+}
+
+function drawSpec() {
+  const [g, W, H] = setupCanvas($("cSpec")), L = 56, B = 34, s = st.spec, c = st.cfg;
+  if (!c) return;
+  const df = c.fs / c.N, fmax = c.fs / 2;
+  const fx = f => L + (W - L - 10) * f / fmax;
+  const m = s ? s.m : [], top = niceMax(Math.max(...m, c.u === "C" ? 0.5 : 100) * 1.1);
+  const ticks = [0, .25, .5, .75, 1].map(r => [fx(fmax * r), (fmax * r).toFixed(fmax < 2 ? 2 : 1)]);
+  axes(g, W, H, L, B, ticks, 0, top, "tần số (Hz)", "|X(f)| " + unit());
+  const py = v => 10 + (H - B - 10) * (1 - v / top), bw = Math.max(2, (W - L - 10) / HALF * 0.6);
+  m.forEach((v, i) => {
+    const k = i + 1, x = fx(k * df);
+    const isPeak = s.ok && Math.abs(k * df - s.fp) <= df / 2 + 1e-9;
+    g.fillStyle = isPeak ? css("--accent2") : css("--accent");
+    g.fillRect(x - bw / 2, py(v), bw, py(0) - py(v));
+  });
+  if (s && s.fe !== undefined) {
+    g.strokeStyle = "#58a6ff"; g.setLineDash([5, 4]); g.lineWidth = 1.5;
+    g.beginPath(); g.moveTo(fx(s.fe), 10); g.lineTo(fx(s.fe), H - B); g.stroke(); g.setLineDash([]);
+  }
+  if (s && s.ok) {
+    g.fillStyle = css("--text"); g.font = "600 13px Segoe UI"; g.textAlign = fx(s.fp) > W - 140 ? "right" : "left";
+    g.fillText(`fp = ${s.fp.toFixed(3)} Hz`, fx(s.fp) + (g.textAlign === "left" ? 8 : -8), 26);
+  }
+}
+
+let drawPending = false;
+function scheduleDraw() {
+  if (drawPending) return; drawPending = true;
+  requestAnimationFrame(() => { drawPending = false; renderMetrics(); drawTime(); drawSpec(); });
+}
+window.addEventListener("resize", scheduleDraw);
+
+// ---------------- Kết nối Web Serial ----------------
+function setStatus(text, live) { $("status").innerHTML = `<span class="dot ${live ? "live" : ""}"></span>${text}`; }
+
+async function connectSerial() {
+  if (!("serial" in navigator)) { alert("Trình duyệt chưa hỗ trợ Web Serial. Hãy dùng Chrome hoặc Edge."); return; }
+  stopSim();
+  try {
+    const port = await navigator.serial.requestPort();
+    await port.open({ baudRate: 115200 });
+    const enc = new TextEncoder(), writer = port.writable.getWriter();
+    st.link = { send: cmd => writer.write(enc.encode(cmd + "\n")) };
+    setStatus("Đã kết nối ESP32", true);
+    st.link.send("?");
+    const reader = port.readable.pipeThrough(new TextDecoderStream()).getReader();
+    let buf = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += value;
+      let i; while ((i = buf.indexOf("\n")) >= 0) { handleLine(buf.slice(0, i)); buf = buf.slice(i + 1); }
+    }
+  } catch (e) { console.error(e); setStatus("Mất kết nối: " + e.message, false); st.link = null; }
+}
+
+// ---------------- Mô phỏng (chạy thử khi không có phần cứng) ----------------
+const PRESETS = [{ dac: false, ts: 500, f0: 0 }, { dac: true, ts: 50, f0: 2.5 }, { dac: true, ts: 50, f0: 4 }, { dac: true, ts: 100, f0: 8 }];
+const sim = { timer: null, cfg: null, sc: 0, hann: true, ring: [], n: 0, t0: 0 };
+
+function fftMag(x, hann) {
+  const re = new Float64Array(N), im = new Float64Array(N);
+  const dc = x.reduce((a, b) => a + b, 0) / N; let ws = 0;
+  for (let i = 0; i < N; i++) { const w = hann ? 0.5 * (1 - Math.cos(2 * Math.PI * i / N)) : 1; re[i] = (x[i] - dc) * w; ws += w; }
+  for (let i = 1, j = 0; i < N; i++) { let bit = N >> 1; for (; j & bit; bit >>= 1) j ^= bit; j ^= bit; if (i < j) { [re[i], re[j]] = [re[j], re[i]]; } }
+  for (let size = 2; size <= N; size <<= 1) {
+    const h = size >> 1;
+    for (let s = 0; s < N; s += size) for (let k = 0; k < h; k++) {
+      const wr = Math.cos(2 * Math.PI * k / size), wi = -Math.sin(2 * Math.PI * k / size), a = s + k, b = a + h;
+      const tr = re[b] * wr - im[b] * wi, ti = re[b] * wi + im[b] * wr;
+      re[b] = re[a] - tr; im[b] = im[a] - ti; re[a] += tr; im[a] += ti;
+    }
+  }
+  const raw = [], mag = [];
+  for (let k = 0; k <= HALF; k++) { raw[k] = Math.hypot(re[k], im[k]); mag[k] = raw[k] * (k === 0 || k === HALF ? 1 : 2) / ws; }
+  let kp = 1; for (let k = 2; k <= HALF; k++) if (mag[k] > mag[kp]) kp = k;
+  let d = 0;
+  if (kp <= HALF - 1) {
+    const [a, b, c] = [-1, 0, 1].map(o => Math.log(raw[kp + o] + 1e-9)), den = a - 2 * b + c;
+    if (Math.abs(den) > 1e-12) d = Math.max(-0.5, Math.min(0.5, 0.5 * (a - c) / den));
+  }
+  return { dc, mag: mag.slice(1), kp, d, amp: mag[kp] };
+}
+const gauss = () => Math.sqrt(-2 * Math.log(1 - Math.random())) * Math.cos(2 * Math.PI * Math.random());
+
+function simApply(cfg, sc) {
+  sim.cfg = cfg; sim.sc = sc; sim.ring = []; sim.n = 0; sim.t0 = performance.now();
+  const fs = 1000 / cfg.ts, fe = cfg.dac ? Math.abs(cfg.f0 - fs * Math.round(cfg.f0 / fs)) : 0;
+  sim.fe = fe;
+  handleLine(JSON.stringify({ t: "cfg", sc, src: cfg.dac ? "dac" : "lm35", fs, f0: cfg.f0, fe, N, u: cfg.dac ? "mV" : "C", w: sim.hann ? "hann" : "rect" }));
+  clearInterval(sim.timer);
+  // Mô phỏng chạy nhanh gấp 4 lần cho chế độ LM35 để đỡ phải chờ 32 s
+  sim.timer = setInterval(simTick, cfg.dac ? cfg.ts : cfg.ts / 4);
+}
+function simTick() {
+  const c = sim.cfg, fs = 1000 / c.ts, t = sim.n / fs; let v;
+  if (c.dac) v = Math.round(128 + 90 * Math.sin(2 * Math.PI * c.f0 * t)) * 3300 / 255 + 4 * gauss();
+  else v = 25 + 1.5 * Math.sin(2 * Math.PI * 0.0625 * t) + 0.08 * gauss();  // giả lập cầm/thả cảm biến chu kỳ 16 s
+  sim.n++; sim.ring.push(v); if (sim.ring.length > N) sim.ring.shift();
+  handleLine(JSON.stringify({ t: "x", n: sim.n, v }));
+  if (sim.ring.length === N) {
+    const r = fftMag(sim.ring, sim.hann), fp = (r.kp + r.d) * fs / N, ok = r.amp > (c.dac ? 20 : 0.15);
+    const msg = { t: "f", dc: r.dc, fp, a: r.amp, ok: ok ? 1 : 0, m: r.mag };
+    if (c.dac) { msg.fe = sim.fe; msg.e = Math.abs(fp - sim.fe) / sim.fe * 100; }
+    handleLine(JSON.stringify(msg));
+  }
+}
+function simCommand(cmd) {
+  if (cmd[0] === "S") { const i = +cmd.slice(1); if (PRESETS[i]) simApply(PRESETS[i], i); }
+  else if (cmd[0] === "W") { sim.hann = cmd[1] === "H" ? true : cmd[1] === "R" ? false : !sim.hann; st.cfg.w = sim.hann ? "hann" : "rect"; renderCfg(); }
+  else if (cmd[0] === "C") { const [ts, f0] = cmd.slice(1).split(",").map(Number); simApply({ dac: true, ts, f0 }, -1); }
+}
+function startSim() { st.link = { send: simCommand }; setStatus("Đang chạy mô phỏng (không có phần cứng)", true); simApply(PRESETS[0], 0); }
+function stopSim() { clearInterval(sim.timer); sim.timer = null; }
+
+// ---------------- Gửi lệnh ----------------
+function send(cmd) { if (!st.link) { alert("Hãy kết nối ESP32 hoặc bấm Chạy mô phỏng trước."); return; } st.link.send(cmd); }
+document.querySelectorAll("[data-cmd]").forEach(b => b.addEventListener("click", () => send(b.dataset.cmd)));
+$("btnCustom").addEventListener("click", () => {
+  const ts = Math.round(+$("inTs").value), f0 = +$("inF0").value;
+  if (!(ts >= 10 && ts <= 1000 && f0 > 0 && f0 <= 50)) { alert("Ts trong khoảng 10–1000 ms, f0 trong khoảng 0–50 Hz"); return; }
+  send(`C${ts},${f0}`);
+});
+$("btnConnect").addEventListener("click", connectSerial);
+$("btnSim").addEventListener("click", startSim);
+
+// ---------------- Bảng kết quả ----------------
+function expName(c) {
+  if (c.src !== "dac") return "Nhiệt độ LM35";
+  return c.f0 > c.fs / 2 ? `Aliasing sin ${c.f0} Hz` : `Sin ${c.f0} Hz`;
+}
+$("btnRecord").addEventListener("click", () => {
+  const c = st.cfg, s = st.spec;
+  if (!c || !s) { alert("Chưa có phổ: chờ đủ 64 mẫu."); return; }
+  st.rows.push({ name: expName(c), win: c.w === "hann" ? "Hann" : "Chữ nhật", fs: c.fs, f0: c.src === "dac" ? c.f0 : "", fe: s.fe ?? "", fp: s.ok ? s.fp : "", e: s.e ?? "", a: s.a, u: unit() });
+  renderRows();
+});
+function renderRows() {
+  $("tbody").innerHTML = st.rows.map((r, i) => `<tr><td>${i + 1}</td><td>${r.name}</td><td>${r.win}</td><td>${fmt(r.fs, 2)}</td><td>${r.f0 === "" ? "–" : fmt(r.f0, 2)}</td>
+    <td>${r.fe === "" ? "–" : fmt(r.fe, 3)}</td><td>${r.fp === "" ? "–" : fmt(r.fp, 3)}</td><td>${r.e === "" ? "–" : fmt(r.e, 2) + " %"}</td><td>${fmt(r.a, r.u === "°C" ? 2 : 0)} ${r.u}</td></tr>`).join("");
+}
+$("btnClear").addEventListener("click", () => { st.rows = []; renderRows(); });
+$("btnCsv").addEventListener("click", () => {
+  const head = "STT,Thi nghiem,Cua so,fs (Hz),f0 (Hz),f ly thuyet (Hz),f do (Hz),Sai so (%),Bien do,Don vi";
+  const body = st.rows.map((r, i) => [i + 1, r.name, r.win, r.fs, r.f0, r.fe, r.fp, r.e, r.a, r.u].join(",")).join("\n");
+  const blob = new Blob(["﻿" + head + "\n" + body], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = "ket_qua_thi_nghiem.csv"; a.click();
+});
+scheduleDraw();
+</script>
+</body>
+</html>
